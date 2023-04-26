@@ -1,0 +1,143 @@
+import sqlite3
+
+class BankAccount:
+    def __init__(self, account_no, balance):
+        self.account_no = account_no
+        self.balance = balance
+
+    def deposit(self, amount):
+        self.balance += amount
+
+    def withdraw(self, amount):
+        if amount > self.balance:
+            raise ValueError("Insufficient funds")
+        self.balance -= amount
+
+class BankDatabase:
+    def __init__(self):
+        self.conn = sqlite3.connect('bank.db')
+        self.create_tables()
+
+    def create_tables(self):
+        c = self.conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS customers (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                email TEXT UNIQUE,
+                password TEXT
+            )
+        ''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS accounts (
+                id INTEGER PRIMARY KEY,
+                account_no INTEGER UNIQUE,
+                balance REAL,
+                customer_id INTEGER,
+                FOREIGN KEY (customer_id) REFERENCES customers(id)
+            )
+        ''')
+        self.conn.commit()
+
+    def create_customer(self, name, email, password):
+        c = self.conn.cursor()
+        c.execute('INSERT INTO customers (name, email, password) VALUES (?, ?, ?)', (name, email, password))
+        customer_id = c.lastrowid
+        self.conn.commit()
+        return customer_id
+
+    def get_customer(self, email, password):
+        c = self.conn.cursor()
+        c.execute('SELECT id, name, email FROM customers WHERE email=? AND password=?', (email, password))
+        row = c.fetchone()
+        if row is None:
+            return None
+        customer_id, name, email = row
+        return {'id': customer_id, 'name': name, 'email': email}
+
+    def create_account(self, customer_id, initial_balance):
+        c = self.conn.cursor()
+        account_no = c.execute('SELECT MAX(account_no) FROM accounts').fetchone()[0] or 0
+        account_no += 1
+        c.execute('INSERT INTO accounts (account_no, balance, customer_id) VALUES (?, ?, ?)', (account_no, initial_balance, customer_id))
+        account_id = c.lastrowid
+        self.conn.commit()
+        return account_id
+
+    def get_accounts(self, customer_id):
+        c = self.conn.cursor()
+        c.execute('SELECT id, account_no, balance FROM accounts WHERE customer_id=?', (customer_id,))
+        rows = c.fetchall()
+        accounts = []
+        for row in rows:
+            account_id, account_no, balance = row
+            accounts.append(BankAccount(account_no, balance))
+        return accounts
+
+    def get_account(self, account_no):
+        c = self.conn.cursor()
+        c.execute('SELECT id, balance FROM accounts WHERE account_no=?', (account_no,))
+        row = c.fetchone()
+        if row is None:
+            return None
+        account_id, balance = row
+        return BankAccount(account_no, balance)
+
+    def deposit(self, account_no, amount):
+        account = self.get_account(account_no)
+        if account is None:
+            raise ValueError("Invalid account number")
+        account.deposit(amount)
+        c = self.conn.cursor()
+        c.execute('UPDATE accounts SET balance=? WHERE account_no=?', (account.balance, account_no))
+        self.conn.commit()
+
+    def withdraw(self, account_no, amount):
+        account = self.get_account(account_no)
+        if account is None:
+            raise ValueError("Invalid account number")
+        try:
+            account.withdraw(amount)
+        except ValueError as e:
+            raise e
+        c = self.conn.cursor()
+       
+        c.execute('UPDATE accounts SET balance=? WHERE account_no=?', (account.balance, account_no))
+        self.conn.commit()
+
+if __name__ == '__main__':
+    db = BankDatabase()
+
+    # create some test customers and accounts
+    alice_id = db.create_customer('Alice', 'alice@example.com', 'password')
+    alice_checking_id = db.create_account(alice_id, 1000)
+    alice_savings_id = db.create_account(alice_id, 5000)
+
+    bob_id = db.create_customer('Bob', 'bob@example.com', 'password')
+    bob_checking_id = db.create_account(bob_id, 2500)
+
+    # test deposit and withdraw methods
+    db.deposit(alice_checking_id, 500)
+    db.withdraw(alice_savings_id, 1000)
+
+    # test getting accounts
+    alice_accounts = db.get_accounts(alice_id)
+    print("Alice's accounts:")
+    for account in alice_accounts:
+        print("Account #{} has a balance of {}".format(account.account_no, account.balance))
+
+    # test getting customer
+    alice = db.get_customer('alice@example.com', 'password')
+    print(alice)
+
+    # test getting non-existent account
+    try:
+        db.get_account(1234)
+    except ValueError as e:
+        print(e)
+
+    # test withdrawing more than balance
+    try:
+        db.withdraw(alice_checking_id, 10000)
+    except ValueError as e:
+        print(e)
